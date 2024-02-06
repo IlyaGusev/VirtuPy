@@ -3,19 +3,28 @@
     <title>VirtuPy</title>
     <meta charset="utf-8">
     <meta http-equiv="content-type" content="text/html; charset=utf-8">
-    <meta property="og:title" content="" />
-    <meta property="og:description" content=""/>
-    <meta property="og:locale" content="en_XX" />
     <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/dylanNew/live2d/webgl/Live2D/lib/live2d.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.2/dist/browser/pixi.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display/dist/index.min.js"></script>
-
+    <script src="https://cdn.jsdelivr.net/gh/RaSan147/pixi-live2d-display@v0.4.0-ls-2/dist/index.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
   </head>
   <body>
-    <canvas id="canvas"></canvas>
-    <div id="control"></div>
-    <script src="/static/js/index.js?v=3" type="module"></script>
+    <canvas id="canvas" style="position: relative; z-index: 1;"></canvas>
+    <div id="chat-container" class="fixed-bottom mr-auto p-3" style="width: 300px; z-index: 1050;">
+      <div class="card">
+        <div class="card-header">Чат</div>
+        <div class="card-body" style="height: 300px; overflow-y: auto;">
+          <div id="messages" class="chat-messages"></div>
+        </div>
+        <div class="card-footer">
+          <textarea id="message-input" class="form-control" rows="2"></textarea>
+          <button id="send-message" class="btn btn-primary mt-2">Отправить</button>
+        </div>
+      </div>
+    </div>
+    <script src="/static/js/index.js" type="module"></script>
   </body>
 </html>
 
