@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 from multiprocessing.pool import ThreadPool
 
-import openai
+from openai import OpenAI
 from jinja2 import Template
 
 
-OPENAI_MODELS = ("gpt-3.5-turbo-16k", "gpt-4-1106-preview")
+OPENAI_MODELS = ("gpt-4o-mini",)
 
 
 @dataclass
@@ -26,9 +26,9 @@ class OpenAIDecodingArguments:
 
 
 DEFAULT_ARGS = OpenAIDecodingArguments()
-DEFAULT_MODEL = "gpt-3.5-turbo-16k"
+DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_SLEEP_TIME = 20
-
+CLIENT = OpenAI()
 
 def openai_completion(
     messages,
@@ -40,13 +40,13 @@ def openai_completion(
     assert decoding_args.n == 1
     while True:
         try:
-            completions = openai.ChatCompletion.create(
+            completions = CLIENT.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 **decoding_args.__dict__
             )
             break
-        except openai.error.OpenAIError as e:
+        except Exception as e:
             logging.warning(f"OpenAIError: {e}.")
             if "Please reduce" in str(e):
                 decoding_args.max_tokens = int(decoding_args.max_tokens * 0.8)
@@ -54,20 +54,4 @@ def openai_completion(
             else:
                 logging.warning("Hit request rate limit; retrying...")
                 time.sleep(sleep_time)
-    return completions.choices[0].message["content"]
-
-
-def openai_batch_completion(
-    batch,
-    decoding_args: OpenAIDecodingArguments = DEFAULT_ARGS,
-    model_name: str = DEFAULT_MODEL,
-    sleep_time: int = DEFAULT_SLEEP_TIME
-):
-    completions = []
-    with ThreadPool(len(batch)) as pool:
-        results = pool.starmap(openai_completion, [
-            (messages, decoding_args, model_name, sleep_time) for messages in batch
-        ])
-        for result in results:
-            completions.append(result)
-    return completions
+    return completions.choices[0].message.content

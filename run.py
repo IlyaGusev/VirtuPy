@@ -9,18 +9,41 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from virtupy.openai_wrapper import openai_completion
-from virtupy.tts import TTS
+from virtupy.silero_tts import SileroTTS
 
 models = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    models["tts"] = TTS()
+    models["tts"] = SileroTTS()
     yield
     models.clear()
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+EMOTE_PROMPT = """Based on the following conversation, choose one of the expressions from a list.
+
+Conversation:
+{conversation}
+
+Possible expressions:
+{expressions}
+
+Your choice:
+"""
+
+def choose_expression(messages):
+    expressions = ["smiling", "sad", "happy", "scared", "shy", "tired", "angry"]
+    conversation = "\n".join([m["role"] + ": " + m["content"] for m in messages])
+    content = EMOTE_PROMPT.format(conversation=conversation, expressions=expressions)
+    messages = [{"role": "user", "content": content}]
+    answer = openai_completion(messages)
+    for expression in expressions:
+        if expression in answer.lower():
+            return expression
+    return "smiling"
 
 
 @app.websocket("/ws")
@@ -32,8 +55,9 @@ async def websocket_endpoint(websocket: WebSocket):
             text = await websocket.receive_text()
             messages.append({"role": "user", "content": text})
             answer = openai_completion(messages)
-            await websocket.send_text(json.dumps({"message": answer}))
             messages.append({"role": "assistant", "content": answer})
+            expression = choose_expression(messages)
+            await websocket.send_text(json.dumps({"message": answer, "expression": expression}))
             audio = models["tts"](answer)
             await websocket.send_bytes(audio)
     except WebSocketDisconnect:
@@ -43,6 +67,3 @@ async def websocket_endpoint(websocket: WebSocket):
 
 
 app.mount("/", StaticFiles(directory="gui", html=True), name="gui")
-
-
-#await websocket.send_text(json.dumps({"expression": random.randint(0, 5)}))

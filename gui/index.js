@@ -1,6 +1,15 @@
 window.PIXI = PIXI;
 
 const MODEL_PATH = "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json";
+const HARU_EXPERSSIONS = {
+    smiling: "f00",
+    sad: "f03",
+    happy: "f04",
+    scared: "f05",
+    shy: "f06",
+    tired: "f07",
+    angry: "f02",
+};
 const DEFAULT_WS_ADDR = "ws://159.69.16.3:5000/ws";
 const MODEL = await PIXI.live2d.Live2DModel.from(MODEL_PATH);
 const SOCKET = new WebSocket(DEFAULT_WS_ADDR);
@@ -24,6 +33,7 @@ function bindSocket(socket, model) {
         let data;
         try {
             data = JSON.parse(event.data);
+            console.log(data);
         } catch (error) {
             console.log(error);
             return;
@@ -35,7 +45,7 @@ function bindSocket(socket, model) {
             addMessageToChat(`Она: ${data.message}`);
         }
         if (data.expression) {
-            model.expression(data.expression);
+            model.expression(HARU_EXPERSSIONS[data.expression]);
         }
     };
 };
@@ -70,5 +80,23 @@ document.getElementById("message-input").addEventListener("keypress", function(e
     MODEL.x = 200;
 
     bindSocket(SOCKET, MODEL);
+
+    const expressionNames = MODEL.internalModel.motionManager.expressionManager.definitions.map(def => def.Name);
+    const expressionSelect = document.getElementById("expression-select");
+    const defaultOption = document.createElement("option");
+    expressionSelect.innerHTML = '';
+    defaultOption.textContent = 'Select an expression';
+    defaultOption.value = '';
+    expressionSelect.appendChild(defaultOption);
+
+    expressionNames.forEach(expression => {
+        const option = document.createElement('option');
+        option.value = expression;
+        option.textContent = expression;
+        expressionSelect.appendChild(option);
+    });
+    expressionSelect.addEventListener("change", function() {
+        MODEL.expression(this.value);
+    });
 })();
 
