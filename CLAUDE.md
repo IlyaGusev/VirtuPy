@@ -14,7 +14,15 @@ uv sync
 
 # Run the FastAPI server
 uv run uvicorn run:app --reload --host 0.0.0.0 --port 5000
+
+# Validate code (always run before committing)
+make validate
 ```
+
+Validation includes:
+- Python: isort, black, flake8, mypy
+- HTML: html-validate (via npx)
+- JavaScript: eslint (via npx)
 
 ## Architecture
 
