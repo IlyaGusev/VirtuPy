@@ -231,7 +231,7 @@ async def websocket_endpoint(websocket: WebSocket):
             expression_sent = False
             text_buffer = ""
 
-            for chunk in openai_completion_stream(messages, model_name=llm):
+            async for chunk in openai_completion_stream(messages, model_name=llm):
                 full_response += chunk
                 text_buffer += chunk
 

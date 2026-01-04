@@ -1,12 +1,12 @@
+import asyncio
 import copy
 import logging
 import os
-import time
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import AsyncIterator, Optional, Sequence
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 load_dotenv()
 
@@ -35,10 +35,10 @@ class OpenAIDecodingArguments:
 DEFAULT_ARGS = OpenAIDecodingArguments()
 DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324"
 DEFAULT_SLEEP_TIME = 20
-CLIENT = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
+CLIENT = AsyncOpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
 
 
-def openai_completion(
+async def openai_completion(
     messages,
     decoding_args: OpenAIDecodingArguments = DEFAULT_ARGS,
     model_name: str = DEFAULT_MODEL,
@@ -48,7 +48,7 @@ def openai_completion(
     assert decoding_args.n == 1
     while True:
         try:
-            completions = CLIENT.chat.completions.create(
+            completions = await CLIENT.chat.completions.create(
                 messages=messages, model=model_name, **decoding_args.__dict__
             )
             break
@@ -61,29 +61,29 @@ def openai_completion(
                 )
             else:
                 logging.warning("Hit request rate limit; retrying...")
-                time.sleep(sleep_time)
+                await asyncio.sleep(sleep_time)
     return completions.choices[0].message.content
 
 
-def openai_completion_stream(
+async def openai_completion_stream(
     messages,
     model_name: str = DEFAULT_MODEL,
     sleep_time: int = DEFAULT_SLEEP_TIME,
-):
+) -> AsyncIterator[str]:
     while True:
         try:
-            stream = CLIENT.chat.completions.create(
+            stream = await CLIENT.chat.completions.create(
                 messages=messages,
                 model=model_name,
                 stream=True,
                 max_tokens=2560,
                 temperature=1.0,
             )
-            for chunk in stream:
+            async for chunk in stream:
                 if chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
             break
         except Exception as e:
             logging.warning(f"OpenAIError: {e}.")
             logging.warning("Hit request rate limit; retrying...")
-            time.sleep(sleep_time)
+            await asyncio.sleep(sleep_time)

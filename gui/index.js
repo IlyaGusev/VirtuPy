@@ -69,9 +69,9 @@ function playNextAudio() {
         playNextAudio();
     };
 
-    // Sync lip movement with audio if model supports it
     if (currentModel && currentModel.internalModel && currentModel.internalModel.motionManager) {
         currentModel.speak(audioURL);
+        currentAudio.muted = true;
     }
 
     currentAudio.play().catch(() => playNextAudio());
