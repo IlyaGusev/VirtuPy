@@ -63,3 +63,27 @@ def openai_completion(
                 logging.warning("Hit request rate limit; retrying...")
                 time.sleep(sleep_time)
     return completions.choices[0].message.content
+
+
+def openai_completion_stream(
+    messages,
+    model_name: str = DEFAULT_MODEL,
+    sleep_time: int = DEFAULT_SLEEP_TIME,
+):
+    while True:
+        try:
+            stream = CLIENT.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                stream=True,
+                max_tokens=2560,
+                temperature=1.0,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+            break
+        except Exception as e:
+            logging.warning(f"OpenAIError: {e}.")
+            logging.warning("Hit request rate limit; retrying...")
+            time.sleep(sleep_time)

@@ -139,13 +139,14 @@ SILERO_VOICES = {
 }
 
 
+DEFAULT_LANGUAGE = "ru"
+DEFAULT_SPEAKER = "baya"
+
+
 class SileroTTS:
-    def __init__(self, language: str = "ru", speaker: str = "baya", sample_rate: int = 48000):
+    def __init__(self, sample_rate: int = 48000):
         self.sample_rate = sample_rate
-        self.speaker = speaker
-        self.language = language
         self.models: dict[str, Any] = {}
-        self._load_model(language)
 
     def _load_model(self, language: str):
         if language not in self.models:
@@ -158,25 +159,15 @@ class SileroTTS:
             self.models[language] = model
         return self.models[language]
 
-    def set_voice(self, language: str, speaker: str):
-        if language not in SILERO_VOICES:
-            raise ValueError(f"Language {language} not supported")
-        if speaker not in SILERO_VOICES[language]["speakers"]:
-            raise ValueError(f"Speaker {speaker} not available for language {language}")
-        self.language = language
-        self.speaker = speaker
-        self._load_model(language)
-
-    def get_current_voice(self) -> dict:
-        return {"language": self.language, "speaker": self.speaker}
-
     @staticmethod
     def get_available_voices() -> dict:
         return {lang: data["speakers"] for lang, data in SILERO_VOICES.items()}
 
-    def __call__(self, text: str) -> bytes:
-        model = self._load_model(self.language)
-        audio = model.apply_tts(text=text, speaker=self.speaker, sample_rate=self.sample_rate)
+    def __call__(
+        self, text: str, language: str = DEFAULT_LANGUAGE, speaker: str = DEFAULT_SPEAKER
+    ) -> bytes:
+        model = self._load_model(language)
+        audio = model.apply_tts(text=text, speaker=speaker, sample_rate=self.sample_rate)
         audio_np = (audio.numpy() * 32767).astype(np.int16)
         buffer = io.BytesIO()
         wavfile.write(buffer, self.sample_rate, audio_np)

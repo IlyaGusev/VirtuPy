@@ -1,19 +1,34 @@
-import random
-import asyncio
 import json
-import time
-import io
+import re
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from virtupy.openai_wrapper import openai_completion, AVAILABLE_LLMS, DEFAULT_MODEL
-from virtupy.silero_tts import SileroTTS
+from virtupy.openai_wrapper import AVAILABLE_LLMS, DEFAULT_MODEL, openai_completion_stream
+from virtupy.silero_tts import DEFAULT_LANGUAGE, DEFAULT_SPEAKER, SILERO_VOICES, SileroTTS
 
-models = {}
-current_llm = DEFAULT_MODEL
+# Regex patterns
+EXPRESSION_PATTERN = re.compile(r'\[EXPRESSION:\s*(\w+)\]')
+EXPRESSION_TAG_PATTERN = re.compile(r'\[EXPRESSION:\s*\w+\]\s*')
+SENTENCE_ENDINGS = re.compile(r'[.!?。！？]+')
+
+# TTS batching settings
+MIN_BATCH_CHARS = 20
+MAX_BATCH_CHARS = 300
+
+SYSTEM_PROMPT_TEMPLATE = """Ты общительная виртуальная девушка.
+
+ПРАВИЛО: Ответ ВСЕГДА начинается с тега эмоции. Формат: [EXPRESSION: эмоция] текст ответа
+Используй ТОЛЬКО ОДИН тег в самом начале. Не используй теги в середине или конце текста.
+Доступные эмоции: {expressions}
+
+Пример:
+[EXPRESSION: {example_expression}] Привет! Рада тебя видеть!"""
+
+DEFAULT_LIVE2D_MODEL = "haru"
 
 LIVE2D_MODELS = {
     "haru": {
@@ -26,18 +41,13 @@ LIVE2D_MODELS = {
             "scared": "f05",
             "shy": "f06",
             "tired": "f07",
-            "angry": "f02"
-        }
+            "angry": "f02",
+        },
     },
     "shizuku": {
         "name": "Shizuku",
         "url": "https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/shizuku/shizuku.model.json",
-        "expressions": {
-            "smiling": "f01",
-            "sad": "f02",
-            "angry": "f03",
-            "happy": "f04"
-        }
+        "expressions": {"smiling": "f01", "sad": "f02", "angry": "f03", "happy": "f04"},
     },
     "natori": {
         "name": "Natori",
@@ -49,8 +59,8 @@ LIVE2D_MODELS = {
             "scared": "Surprised",
             "shy": "Blushing",
             "tired": "Normal",
-            "angry": "Angry"
-        }
+            "angry": "Angry",
+        },
     },
     "mao": {
         "name": "Mao",
@@ -63,25 +73,45 @@ LIVE2D_MODELS = {
             "sad": "exp_05",
             "blushing": "exp_06",
             "scared": "exp_07",
-            "angry": "exp_08"
-        }
+            "angry": "exp_08",
+        },
     },
     "hiyori": {
         "name": "Hiyori",
         "url": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Hiyori/Hiyori.model3.json",
-        "expressions": {}
+        "expressions": {},
     },
     "mark": {
         "name": "Mark",
         "url": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Mark/Mark.model3.json",
-        "expressions": {}
+        "expressions": {},
     },
     "rice": {
         "name": "Rice",
         "url": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Rice/Rice.model3.json",
-        "expressions": {}
-    }
+        "expressions": {},
+    },
 }
+
+models = {}
+
+
+def get_available_expressions(live2d_model: str) -> list[str]:
+    """Get expression names available for a Live2D model."""
+    model_data = LIVE2D_MODELS.get(live2d_model, {})
+    return list(model_data.get("expressions", {}).keys())
+
+
+def build_system_prompt(live2d_model: str) -> str:
+    """Build system prompt with expressions available for given model."""
+    expressions = get_available_expressions(live2d_model)
+    if not expressions:
+        expressions = ["happy"]  # Fallback if model has no expressions
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        expressions=", ".join(expressions),
+        example_expression=expressions[0] if expressions else "happy",
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -93,27 +123,33 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-EMOTE_PROMPT = """Based on the following conversation, choose one of the expressions from a list.
+def parse_expression(text: str, live2d_model: str) -> str | None:
+    match = EXPRESSION_PATTERN.search(text)
+    if match:
+        expr = match.group(1).lower()
+        available = get_available_expressions(live2d_model)
+        if expr in available:
+            return expr
+    return None
 
-Conversation:
-{conversation}
 
-Possible expressions:
-{expressions}
+def remove_expression_tag(text: str) -> str:
+    return EXPRESSION_TAG_PATTERN.sub("", text)
 
-Your choice:
-"""
 
-def choose_expression(messages):
-    expressions = ["smiling", "sad", "happy", "scared", "shy", "tired", "angry"]
-    conversation = "\n".join([m["role"] + ": " + m["content"] for m in messages])
-    content = EMOTE_PROMPT.format(conversation=conversation, expressions=expressions)
-    messages = [{"role": "user", "content": content}]
-    answer = openai_completion(messages)
-    for expression in expressions:
-        if expression in answer.lower():
-            return expression
-    return "smiling"
+def find_batch_cutoff(text: str) -> int | None:
+    """Find a good cutoff point for text batching at sentence boundaries."""
+    matches = list(SENTENCE_ENDINGS.finditer(text))
+    if not matches:
+        return None
+
+    cutoff = None
+    for match in matches:
+        if match.end() >= MIN_BATCH_CHARS:
+            if match.end() >= MAX_BATCH_CHARS:
+                return match.end()
+            cutoff = match.end()
+    return cutoff
 
 
 @app.get("/api/models")
@@ -123,53 +159,110 @@ async def get_models():
 
 @app.get("/api/voices")
 async def get_voices():
-    return JSONResponse(content={
-        "available": SileroTTS.get_available_voices(),
-        "current": models["tts"].get_current_voice()
-    })
-
-
-@app.post("/api/voice")
-async def set_voice(language: str, speaker: str):
-    try:
-        models["tts"].set_voice(language, speaker)
-        return JSONResponse(content={"success": True, "voice": models["tts"].get_current_voice()})
-    except ValueError as e:
-        return JSONResponse(content={"success": False, "error": str(e)}, status_code=400)
+    return JSONResponse(
+        content={
+            "available": SileroTTS.get_available_voices(),
+            "default": {"language": DEFAULT_LANGUAGE, "speaker": DEFAULT_SPEAKER},
+        }
+    )
 
 
 @app.get("/api/llm")
 async def get_llm():
-    return JSONResponse(content={"available": AVAILABLE_LLMS, "current": current_llm})
+    return JSONResponse(content={"available": AVAILABLE_LLMS, "default": DEFAULT_MODEL})
 
 
-@app.post("/api/llm")
-async def set_llm(model: str):
-    global current_llm
-    if model not in AVAILABLE_LLMS:
-        return JSONResponse(content={"success": False, "error": "Invalid model"}, status_code=400)
-    current_llm = model
-    return JSONResponse(content={"success": True, "current": current_llm})
+def has_speakable_text(text: str) -> bool:
+    return any(c.isalpha() for c in text)
+
+
+async def send_text_with_audio(websocket: WebSocket, text: str, language: str, speaker: str):
+    await websocket.send_text(json.dumps({"text": text}))
+    if has_speakable_text(text):
+        audio = models["tts"](text, language, speaker)
+        await websocket.send_bytes(audio)
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    messages = [{"role": "system", "content": "Ты общительная виртуальная девушка"}]
+    messages: list[dict[str, str]] = []
+    live2d_model = DEFAULT_LIVE2D_MODEL
+    llm = DEFAULT_MODEL
+    tts_language = DEFAULT_LANGUAGE
+    tts_speaker = DEFAULT_SPEAKER
+
     try:
         while True:
-            text = await websocket.receive_text()
+            raw = await websocket.receive_text()
+
+            try:
+                data = json.loads(raw)
+                if "model" in data:
+                    if data["model"] in LIVE2D_MODELS:
+                        live2d_model = data["model"]
+                    continue
+                if "llm" in data:
+                    if data["llm"] in AVAILABLE_LLMS:
+                        llm = data["llm"]
+                    continue
+                if "voice" in data:
+                    lang = data["voice"].get("language")
+                    spk = data["voice"].get("speaker")
+                    if lang in SILERO_VOICES and spk in SILERO_VOICES[lang]["speakers"]:
+                        tts_language = lang
+                        tts_speaker = spk
+                    continue
+                text = data.get("text", "")
+            except json.JSONDecodeError:
+                text = raw
+
+            if not text:
+                continue
+
+            system_prompt = build_system_prompt(live2d_model)
+            if messages and messages[0]["role"] == "system":
+                messages[0]["content"] = system_prompt
+            else:
+                messages.insert(0, {"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": text})
-            answer = openai_completion(messages, model_name=current_llm)
-            messages.append({"role": "assistant", "content": answer})
-            expression = choose_expression(messages)
-            await websocket.send_text(json.dumps({"message": answer, "expression": expression}))
-            audio = models["tts"](answer)
-            await websocket.send_bytes(audio)
+
+            full_response = ""
+            expression_sent = False
+            text_buffer = ""
+
+            for chunk in openai_completion_stream(messages, model_name=llm):
+                full_response += chunk
+                text_buffer += chunk
+
+                if not expression_sent:
+                    expression = parse_expression(full_response, live2d_model)
+                    if expression:
+                        await websocket.send_text(json.dumps({"expression": expression}))
+                        expression_sent = True
+                        text_buffer = remove_expression_tag(text_buffer)
+
+                if expression_sent and len(text_buffer) >= MIN_BATCH_CHARS:
+                    cutoff = find_batch_cutoff(text_buffer)
+                    if cutoff:
+                        batch_text = remove_expression_tag(text_buffer[:cutoff]).strip()
+                        text_buffer = text_buffer[cutoff:].lstrip()
+                        if batch_text:
+                            await send_text_with_audio(websocket, batch_text + " ", tts_language, tts_speaker)
+
+            remaining = remove_expression_tag(text_buffer).strip()
+            if remaining:
+                await send_text_with_audio(websocket, remaining, tts_language, tts_speaker)
+
+            await websocket.send_text(json.dumps({"done": True}))
+
+            clean_response = remove_expression_tag(full_response)
+            messages.append({"role": "assistant", "content": clean_response})
+
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        print(f"Error: {e}")
+    except Exception:
+        traceback.print_exc()
 
 
 app.mount("/", StaticFiles(directory="gui", html=True), name="gui")

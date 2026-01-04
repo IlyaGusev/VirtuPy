@@ -4,6 +4,7 @@ const DEFAULT_WS_ADDR = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${l
 const API_BASE = '/virtupy/api';
 
 let currentModel = null;
+let currentModelKey = 'haru';
 let currentExpressionMap = {};
 let availableModels = {};
 let app = null;
@@ -45,14 +46,53 @@ function hideTypingIndicator() {
 }
 
 
+let currentBotMessage = null;
+let audioQueue = [];
+let isPlayingAudio = false;
+let currentAudio = null;
+
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        isPlayingAudio = false;
+        return;
+    }
+    isPlayingAudio = true;
+    const audioURL = audioQueue.shift();
+
+    currentAudio = new Audio(audioURL);
+    currentAudio.onended = () => {
+        URL.revokeObjectURL(audioURL);
+        playNextAudio();
+    };
+    currentAudio.onerror = () => {
+        URL.revokeObjectURL(audioURL);
+        playNextAudio();
+    };
+
+    // Sync lip movement with audio if model supports it
+    if (currentModel && currentModel.internalModel && currentModel.internalModel.motionManager) {
+        currentModel.speak(audioURL);
+    }
+
+    currentAudio.play().catch(() => playNextAudio());
+}
+
+function queueAudio(blob) {
+    const audioURL = URL.createObjectURL(blob);
+    audioQueue.push(audioURL);
+    if (!isPlayingAudio) {
+        playNextAudio();
+    }
+}
+
 function bindSocket(socket) {
+    socket.onopen = () => {
+        socket.send(JSON.stringify({ model: currentModelKey }));
+    };
+
     socket.onmessage = (event) => {
         if (event.data instanceof Blob) {
-            hideTypingIndicator();
-            if (currentModel) {
-                const audioURL = URL.createObjectURL(event.data);
-                currentModel.speak(audioURL);
-            }
+            queueAudio(event.data);
             return;
         }
         let data;
@@ -65,16 +105,31 @@ function bindSocket(socket) {
         if (!data) {
             return;
         }
-        if (data.message) {
-            hideTypingIndicator();
-            addMessageToChat(data.message, false);
-        }
+
+        // Handle expression
         if (data.expression && currentModel) {
             const exprId = currentExpressionMap[data.expression];
             if (exprId) {
                 currentModel.expression(exprId);
             }
             updateActiveExpression(exprId || data.expression);
+        }
+
+        // Handle streamed text
+        if (data.text) {
+            hideTypingIndicator();
+            if (!currentBotMessage) {
+                currentBotMessage = document.createElement("div");
+                currentBotMessage.className = 'message bot';
+                messagesContainer.insertBefore(currentBotMessage, typingIndicator);
+            }
+            currentBotMessage.textContent += data.text;
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Handle completion
+        if (data.done) {
+            currentBotMessage = null;
         }
     };
 }
@@ -169,6 +224,11 @@ async function loadModel(modelKey) {
     if (!modelData) return;
 
     modelSelect.disabled = true;
+    currentModelKey = modelKey;
+
+    if (SOCKET.readyState === WebSocket.OPEN) {
+        SOCKET.send(JSON.stringify({ model: modelKey }));
+    }
 
     if (currentModel) {
         app.stage.removeChild(currentModel);
@@ -287,23 +347,26 @@ async function fetchModels() {
 }
 
 
+let availableVoices = {};
+
 async function fetchVoices() {
     try {
         const response = await fetch(`${API_BASE}/voices`);
         const data = await response.json();
+        availableVoices = data.available;
 
         languageSelect.innerHTML = '';
         const langNames = { ru: 'Russian', en: 'English', de: 'German', es: 'Spanish', fr: 'French' };
 
-        for (const lang of Object.keys(data.available)) {
+        for (const lang of Object.keys(availableVoices)) {
             const option = document.createElement('option');
             option.value = lang;
             option.textContent = langNames[lang] || lang;
             languageSelect.appendChild(option);
         }
 
-        languageSelect.value = data.current.language;
-        updateSpeakerOptions(data.available[data.current.language], data.current.speaker);
+        languageSelect.value = data.default.language;
+        updateSpeakerOptions(availableVoices[data.default.language], data.default.speaker);
     } catch (error) {
         console.error("Failed to fetch voices:", error);
     }
@@ -326,45 +389,27 @@ function updateSpeakerOptions(speakers, currentSpeaker = null) {
 }
 
 
-languageSelect.addEventListener('change', async function() {
-    const lang = this.value;
-    try {
-        const response = await fetch(`${API_BASE}/voices`);
-        const data = await response.json();
-        const speakers = data.available[lang] || [];
-        updateSpeakerOptions(speakers);
-
-        if (speakers.length > 0) {
-            await setVoice(lang, speakers[0]);
-        }
-    } catch (error) {
-        console.error("Failed to update speakers:", error);
-    }
-});
-
-
-speakerSelect.addEventListener('change', async function() {
-    const lang = languageSelect.value;
-    const speaker = this.value;
-    await setVoice(lang, speaker);
-});
-
-
-async function setVoice(language, speaker) {
-    try {
-        speakerSelect.disabled = true;
-        languageSelect.disabled = true;
-
-        await fetch(`${API_BASE}/voice?language=${encodeURIComponent(language)}&speaker=${encodeURIComponent(speaker)}`, {
-            method: 'POST'
-        });
-    } catch (error) {
-        console.error("Failed to set voice:", error);
-    } finally {
-        speakerSelect.disabled = false;
-        languageSelect.disabled = false;
+function sendVoice(language, speaker) {
+    if (SOCKET.readyState === WebSocket.OPEN) {
+        SOCKET.send(JSON.stringify({ voice: { language, speaker } }));
     }
 }
+
+
+languageSelect.addEventListener('change', function() {
+    const lang = this.value;
+    const speakers = availableVoices[lang] || [];
+    updateSpeakerOptions(speakers);
+
+    if (speakers.length > 0) {
+        sendVoice(lang, speakers[0]);
+    }
+});
+
+
+speakerSelect.addEventListener('change', function() {
+    sendVoice(languageSelect.value, this.value);
+});
 
 
 modelSelect.addEventListener('change', function() {
@@ -385,24 +430,16 @@ async function fetchLLMs() {
             llmSelect.appendChild(option);
         }
 
-        llmSelect.value = data.current;
+        llmSelect.value = data.default;
     } catch (error) {
         console.error("Failed to fetch LLMs:", error);
     }
 }
 
 
-llmSelect.addEventListener('change', async function() {
-    const model = this.value;
-    try {
-        llmSelect.disabled = true;
-        await fetch(`${API_BASE}/llm?model=${encodeURIComponent(model)}`, {
-            method: 'POST'
-        });
-    } catch (error) {
-        console.error("Failed to set LLM:", error);
-    } finally {
-        llmSelect.disabled = false;
+llmSelect.addEventListener('change', function() {
+    if (SOCKET.readyState === WebSocket.OPEN) {
+        SOCKET.send(JSON.stringify({ llm: this.value }));
     }
 });
 

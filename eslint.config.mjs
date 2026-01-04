@@ -13,6 +13,7 @@ export default [
         Blob: "readonly",
         URL: "readonly",
         location: "readonly",
+        Audio: "readonly",
         PIXI: "readonly"
       }
     },
