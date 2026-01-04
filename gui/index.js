@@ -10,7 +10,7 @@ const HARU_EXPERSSIONS = {
     tired: "f07",
     angry: "f02",
 };
-const DEFAULT_WS_ADDR = "ws://159.69.16.3:5000/ws";
+const DEFAULT_WS_ADDR = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/virtupy/ws`;
 const MODEL = await PIXI.live2d.Live2DModel.from(MODEL_PATH);
 const SOCKET = new WebSocket(DEFAULT_WS_ADDR);
 

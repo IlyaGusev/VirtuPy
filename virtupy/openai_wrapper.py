@@ -1,3 +1,4 @@
+import os
 import copy
 import logging
 import time
@@ -8,10 +9,14 @@ from multiprocessing.pool import ThreadPool
 
 from openai import OpenAI
 from jinja2 import Template
+from dotenv import load_dotenv
 
+load_dotenv()
 
 OPENAI_MODELS = ("gpt-4o-mini",)
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 @dataclass
 class OpenAIDecodingArguments:
@@ -28,7 +33,7 @@ class OpenAIDecodingArguments:
 DEFAULT_ARGS = OpenAIDecodingArguments()
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_SLEEP_TIME = 20
-CLIENT = OpenAI()
+CLIENT = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
 
 def openai_completion(
     messages,
